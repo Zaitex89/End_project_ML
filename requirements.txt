@@ -1,0 +1,12 @@
+# OBS: torch/torchvision instal SEPARATLY with ROCm-wheels (see README).
+# Don't install torch from here - then you will get CPU- or CUDA-version.
+
+numpy>=1.26
+pandas>=2.0
+scikit-learn>=1.4
+matplotlib>=3.8
+pillow>=10.0
+joblib>=1.3
+tqdm>=4.66
+umap-learn>=0.5
+hdbscan>=0.8
