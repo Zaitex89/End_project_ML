@@ -1,7 +1,12 @@
 """
 Data prep + multimodal Dataset-class for HAM10000.
 
-Here we do missing values,normalising, train/val/test-split.
+Here we do missing values, normalising, and the train/val/test-split.
+
+The split is GROUPED on lesion_id and stratified on the diagnosis. HAM10000
+contains up to 6 photos of the same lesion, so a plain row-wise split puts the
+same lesion in both train and test - the model then recognises the lesion
+instead of the diagnosis and every metric comes out too high.
 """
 from pathlib import Path
 
@@ -115,22 +120,52 @@ class HAM10000Dataset(Dataset):
         return image, tab, label
 
 
-# 4. Build dataloaders (stratified split + unbalance handling)
+# 4. Grouped + stratified split
+def build_splits(df: pd.DataFrame | None = None, verbose: bool = True):
+    """
+    Split into train/val/test so that:
+      - no lesion_id appears in more than one split (no leakage)
+      - the class distribution is preserved in each split (stratified)
+
+    StratifiedGroupKFold does both at once. We take one fold as test, one as
+    val, and the rest as train. Same seed everywhere, so train.py, evaluate.py,
+    baselines.py and eda.py all see the exact same split.
+    """
+    from sklearn.model_selection import StratifiedGroupKFold
+
+    if df is None:
+        df = load_metadata()
+
+    n_splits = max(3, round(1.0 / config.TEST_SPLIT))  # 0.15 -> 7 folds
+    sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True,
+                                random_state=config.SEED)
+    folds = list(sgkf.split(df, df["label"], groups=df[config.GROUP_COL]))
+
+    test_idx = folds[0][1]
+    val_idx = folds[1][1]
+    holdout = set(test_idx) | set(val_idx)
+    train_idx = np.array([i for i in range(len(df)) if i not in holdout])
+
+    train_df = df.iloc[train_idx].reset_index(drop=True)
+    val_df = df.iloc[val_idx].reset_index(drop=True)
+    test_df = df.iloc[test_idx].reset_index(drop=True)
+
+    if verbose:
+        overlap = (set(train_df[config.GROUP_COL]) & set(test_df[config.GROUP_COL])) | \
+                  (set(train_df[config.GROUP_COL]) & set(val_df[config.GROUP_COL])) | \
+                  (set(val_df[config.GROUP_COL]) & set(test_df[config.GROUP_COL]))
+        assert not overlap, f"lesion_id leaked across splits: {len(overlap)}"
+        n = len(df)
+        print(f"[info] Train/Val/Test: {len(train_df)}/{len(val_df)}/{len(test_df)} "
+              f"({len(train_df)/n:.0%}/{len(val_df)/n:.0%}/{len(test_df)/n:.0%})")
+        print(f"[info] lesion_id overlap between splits: 0 (grouped split OK)")
+
+    return train_df, val_df, test_df
+
+
+# 5. Build dataloaders (grouped split + unbalance handling)
 def build_dataloaders():
-    from sklearn.model_selection import train_test_split
-
-    df = load_metadata()
-
-    # Stratified split: train / (val + test), then val / test
-    train_df, temp_df = train_test_split(
-        df, test_size=config.VAL_SPLIT + config.TEST_SPLIT,
-        stratify=df["label"], random_state=config.SEED,
-    )
-    rel_test = config.TEST_SPLIT / (config.VAL_SPLIT + config.TEST_SPLIT)
-    val_df, test_df = train_test_split(
-        temp_df, test_size=rel_test,
-        stratify=temp_df["label"], random_state=config.SEED,
-    )
+    train_df, val_df, test_df = build_splits()
 
     pre = build_tabular_preprocessor()
     X_train = pre.fit_transform(train_df)
@@ -140,31 +175,39 @@ def build_dataloaders():
     joblib.dump(pre, config.PREPROCESSOR_PATH)
     tab_dim = X_train.shape[1]
     print(f"[info] Tabular features: {tab_dim} dimensions")
-    print(f"[info] Train/Val/Test: {len(train_df)}/{len(val_df)}/{len(test_df)}")
 
     train_ds = HAM10000Dataset(train_df, X_train, train_transform())
     val_ds = HAM10000Dataset(val_df, X_val, eval_transform())
     test_ds = HAM10000Dataset(test_df, X_test, eval_transform())
 
-    # Unbalance handling: WeightedRandomSampler gives rare classes a higher chance
-    class_counts = train_df["label"].value_counts().sort_index().values
-    class_weights = 1.0 / class_counts
-    sample_weights = class_weights[train_df["label"].values]
-    sampler = WeightedRandomSampler(
-        weights=torch.from_numpy(sample_weights).double(),
-        num_samples=len(sample_weights),
-        replacement=True,
-    )
+    class_counts = train_df["label"].value_counts().reindex(
+        range(len(config.DX_CLASSES)), fill_value=0).values
 
+    # Unbalance handling - exactly ONE strategy, chosen in config.py.
+    # Sampler and class-weighted loss both push the rare classes up; doing both
+    # double-counts the correction and wrecks precision on the majority class.
     common = dict(num_workers=config.NUM_WORKERS, pin_memory=True)
-    train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE,
-                              sampler=sampler, **common)
+    if config.IMBALANCE_STRATEGY == "sampler":
+        inv = 1.0 / np.maximum(class_counts, 1)
+        sample_weights = inv[train_df["label"].values]
+        sampler = WeightedRandomSampler(
+            weights=torch.from_numpy(sample_weights).double(),
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
+        train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE,
+                                  sampler=sampler, **common)
+    else:
+        train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE,
+                                  shuffle=True, **common)
+    print(f"[info] Imbalance strategy: {config.IMBALANCE_STRATEGY}")
+
     val_loader = DataLoader(val_ds, batch_size=config.BATCH_SIZE,
                             shuffle=False, **common)
     test_loader = DataLoader(test_ds, batch_size=config.BATCH_SIZE,
                              shuffle=False, **common)
 
-    # class_counts is also used for weighted lossfunction in train.py
+    # class_counts is also used for the weighted loss function in train.py
     return train_loader, val_loader, test_loader, tab_dim, class_counts
 
 

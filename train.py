@@ -4,11 +4,16 @@ Trains the multimodal model.
     python train.py
 
 Uses:
-  - mixed precision (torch.cuda.amp) -> quicker + less VRAM
-  - class weight in the loss function -> handles the big unbalance
+  - mixed precision (torch.amp) -> quicker + less VRAM
+  - ONE imbalance strategy, picked in config.IMBALANCE_STRATEGY
   - two phase transfer learning -> first frozen backbone, then fine tuning
 saves the best model (after macro-F1 on the validation) to artifacts/.
 """
+import json
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -61,13 +66,19 @@ def main():
     train_loader, val_loader, _, tab_dim, class_counts = build_dataloaders()
     model = build_model(tab_dim)
 
-    # Class weight: rare classes gets bigger weight in the loss function
-    weights = (class_counts.sum() / (len(class_counts) * class_counts))
-    class_weights = torch.tensor(weights, dtype=torch.float32, device=config.DEVICE)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # The loss is weighted only when the dataloader is NOT already resampling.
+    # See the note in config.IMBALANCE_STRATEGY.
+    if config.IMBALANCE_STRATEGY == "loss_weights":
+        weights = class_counts.sum() / (len(class_counts) * class_counts)
+        class_weights = torch.tensor(weights, dtype=torch.float32,
+                                     device=config.DEVICE)
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+    else:
+        criterion = nn.CrossEntropyLoss()
 
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler("cuda")
     best_f1 = 0.0
+    history = []
 
     # Phase 1: frozen backbone, only train new layers
     model.freeze_backbone(True)
@@ -95,6 +106,8 @@ def main():
         print(f"Epoch {epoch:02d} | "
               f"train loss {tr_loss:.3f} f1 {tr_f1:.3f} | "
               f"val loss {va_loss:.3f} f1 {va_f1:.3f}")
+        history.append({"epoch": epoch, "train_loss": tr_loss, "train_f1": tr_f1,
+                        "val_loss": va_loss, "val_f1": va_f1})
 
         if va_f1 > best_f1:
             best_f1 = va_f1
@@ -102,8 +115,31 @@ def main():
                        config.MODEL_PATH)
             print(f"    * new best model saved (macro-F1 {best_f1:.3f})")
 
+    (config.ARTIFACTS_DIR / "history.json").write_text(json.dumps(history, indent=2))
+    plot_history(history)
+
     print(f"\nDone. Best val macro-F1: {best_f1:.3f}")
     print(f"Model saved: {config.MODEL_PATH}")
+
+
+def plot_history(history):
+    """Loss + macro-F1 per epoch - shows whether the fine-tuning overfits."""
+    ep = [h["epoch"] for h in history]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    axes[0].plot(ep, [h["train_loss"] for h in history], label="train")
+    axes[0].plot(ep, [h["val_loss"] for h in history], label="val")
+    axes[0].set_title("Loss")
+    axes[1].plot(ep, [h["train_f1"] for h in history], label="train")
+    axes[1].plot(ep, [h["val_f1"] for h in history], label="val")
+    axes[1].set_title("Macro-F1")
+    for ax in axes:
+        ax.axvline(config.FREEZE_EPOCHS + 0.5, color="grey", ls="--", alpha=0.6)
+        ax.set_xlabel("Epoch")
+        ax.legend()
+    fig.suptitle("Training history (dashed line = backbone unfrozen)")
+    fig.tight_layout()
+    fig.savefig(config.FIGURES_DIR / "training_history.png", dpi=150)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
