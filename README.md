@@ -57,14 +57,15 @@ If you put it somewhere else, change `DATA_DIR` and `IMAGE_DIRS` at the top of
 In this order. Times are what it took on my machine (RX 6800 XT, 6 dataloader
 workers).
 
-| Step | Command | Time | Output
-| 1 | `python verify_setup.py` | instant | GPU check
-| 2 | `python eda.py` | ~45 s | `eda_report.txt` + 5 figures
-| 3 | `python dataset.py` | ~15 s | prints the split, sanity-checks a batch
-| 4 | `python extract_embeddings.py` | ~1 min | UMAP/cluster figure
-| 5 | `python train.py` | ~7 min | `best_model.pt`, `history.json`, training curve
-| 6 | `python evaluate.py` | ~25 s | report, metrics JSON, 3 figures
-| 7 | `python baselines.py` | ~1.5 min | `baseline_results.csv` + comparison figure
+| Step | Command | Time | Output |
+|---|---|---|---|
+| 1 | `python verify_setup.py` | instant | GPU check |
+| 2 | `python eda.py` | ~45 s | `eda_report.txt` + 5 figures |
+| 3 | `python dataset.py` | ~15 s | prints the split, sanity-checks a batch |
+| 4 | `python extract_embeddings.py` | ~1 min | UMAP/cluster figure |
+| 5 | `python train.py` | ~8 min | `best_model.pt`, `history.json`, training curve |
+| 6 | `python evaluate.py` | ~25 s | report, metrics JSON, 3 figures |
+| 7 | `python baselines.py` | ~1.5 min | `baseline_results.csv` + comparison figure |
 
 Steps 2, 3 and 4 do not need a trained model, so you can run them first to see
 what the data looks like. Step 7 reads `metrics_multimodal.json` if it exists,
@@ -104,13 +105,14 @@ the two can't be combined by accident. Default is `loss_weights`.
 
 Test set, 1431 images, grouped split.
 
-| Metric | Value
-| Accuracy | 0.816
-| Balanced accuracy / macro recall | 0.682
-| Macro F1 | 0.692
-| Weighted F1 | 0.819
-| Macro AUC-ROC (OvR) | 0.958
-| Macro average precision | 0.731
+| Metric | Value |
+|---|---|
+| Accuracy | 0.816 |
+| Balanced accuracy / macro recall | 0.682 |
+| Macro F1 | 0.692 |
+| Weighted F1 | 0.819 |
+| Macro AUC-ROC (OvR) | 0.958 |
+| Macro average precision | 0.731 |
 
 Per class, from `artifacts/classification_report.txt`:
 
