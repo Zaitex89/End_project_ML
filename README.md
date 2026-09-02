@@ -13,6 +13,9 @@ I ran everything on an AMD RX 6800 XT with ROCm under Ubuntu. It will run on
 NVIDIA/CUDA too since nothing is ROCm-specific except which PyTorch wheel you
 install.
 
+The presentation I gave on this is in the repo as
+`multimodal_end_project.pptx`, 11 slides.
+
 ## Setup
 
 PyTorch has to be installed separately from `requirements.txt`, otherwise pip
@@ -180,6 +183,8 @@ train.py                training loop, saves best model on val macro F1
 evaluate.py             confusion matrix, ROC, PR, classification report, metrics JSON
 extract_embeddings.py   unsupervised: PCA, UMAP, KMeans, silhouette, ARI
 baselines.py            the six comparison models
+
+multimodal_end_project.pptx   the presentation, with speaker notes
 ```
 
 ## Config worth knowing about
